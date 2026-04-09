@@ -283,7 +283,13 @@ func (h *HandleMain) HandleMainByID(w http.ResponseWriter, r *http.Request) {
 	// Espera paths tipo: /api/main/{id}
 	id := strings.TrimPrefix(r.URL.Path, "/api/main/")
 	if id == "" {
-		http.Error(w, "missing id", http.StatusBadRequest)
+		writeMainJSONResponse(w, http.StatusBadRequest, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    "Falta el id en la URL.",
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     nil,
+		})
 		return
 	}
 
@@ -292,34 +298,90 @@ func (h *HandleMain) HandleMainByID(w http.ResponseWriter, r *http.Request) {
 		m, err := h.Service.GetByID(id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				http.Error(w, "not found", http.StatusNotFound)
+				writeMainJSONResponse(w, http.StatusNotFound, model.Response{
+					Status:    "error",
+					Total:     0,
+					Advice:    "No existe un registro con el id indicado.",
+					Timestamp: time.Now().UTC().Truncate(time.Second),
+					Items:     nil,
+				})
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+				Status:    "error",
+				Total:     0,
+				Advice:    err.Error(),
+				Timestamp: time.Now().UTC().Truncate(time.Second),
+				Items:     nil,
+			})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(m)
+		writeMainJSONResponse(w, http.StatusOK, model.Response{
+			Status:    "success",
+			Total:     1,
+			Advice:    "Registro recuperado correctamente.",
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     []*model.Maindb{m},
+		})
 	case http.MethodPut:
-		var m model.Maindb
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		m.ID = id
-		m.ApplyDefaults()
-		if err := h.Service.Update(&m); err != nil {
+		// Solo deshabilita: pone available de true a false. No modifica otros campos ni usa el body.
+		m, err := h.Service.GetByID(id)
+		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				http.Error(w, "not found", http.StatusNotFound)
+				writeMainJSONResponse(w, http.StatusNotFound, model.Response{
+					Status:    "error",
+					Total:     0,
+					Advice:    "No existe un registro con el id indicado.",
+					Timestamp: time.Now().UTC().Truncate(time.Second),
+					Items:     nil,
+				})
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+				Status:    "error",
+				Total:     0,
+				Advice:    err.Error(),
+				Timestamp: time.Now().UTC().Truncate(time.Second),
+				Items:     nil,
+			})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(m)
+		if !m.Available {
+			writeMainJSONResponse(w, http.StatusOK, model.Response{
+				Status:    "success",
+				Total:     1,
+				Advice:    "El registro ya se había actualizado (available ya era false).",
+				Timestamp: time.Now().UTC().Truncate(time.Second),
+				Items:     []*model.Maindb{m},
+			})
+			return
+		}
+		m.Available = false
+		if err := h.Service.Update(m); err != nil {
+			writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+				Status:    "error",
+				Total:     0,
+				Advice:    err.Error(),
+				Timestamp: time.Now().UTC().Truncate(time.Second),
+				Items:     nil,
+			})
+			return
+		}
+		writeMainJSONResponse(w, http.StatusOK, model.Response{
+			Status:    "success",
+			Total:     1,
+			Advice:    "Registro deshabilitado correctamente (available pasó a false).",
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     []*model.Maindb{m},
+		})
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMainJSONResponse(w, http.StatusMethodNotAllowed, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    "Método no permitido.",
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     nil,
+		})
 		return
 	}
 }

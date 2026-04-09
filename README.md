@@ -46,7 +46,23 @@ Base URL:
 Devuelve todos los registros.
 
 ```bash
-curl http://localhost:8005/api/main
+curl http://localhost:8005/api/main ^
+  -H "token: to"
+```
+
+Filtros opcionales (se pueden combinar):
+
+- `fromdate=YYYY-MM-DD`: filtra por `created_at >= fromdate` (desde el inicio del día UTC).
+- `category=a,b,c`: filtra por una o varias categorías (separadas por coma).
+- `avariable=true|false|1|0`: filtra por `available`.
+- `max=N`: máximo de registros (LIMIT). Tope interno: 1000.
+- `ord=asc|desc`: orden por fecha (`created_at`). Default: `desc`.
+
+Ejemplo combinado:
+
+```bash
+curl "http://localhost:8005/api/main?fromdate=2026-04-09&category=a,b&avariable=true&max=50&ord=desc" ^
+  -H "token: to"
 ```
 
 #### `POST /api/main`

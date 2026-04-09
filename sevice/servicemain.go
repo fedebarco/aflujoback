@@ -3,6 +3,7 @@ package service
 import (
 	"aflujo/model"
 	"aflujo/store"
+	"time"
 )
 
 type Service struct {
@@ -17,12 +18,12 @@ func (s *Service) GetAll() ([]*model.Maindb, error) {
 	return s.store.GetAll()
 }
 
-func (s *Service) GetByID(id string) (*model.Maindb, error) {
-	return s.store.GetByID(id)
+func (s *Service) GetAllFiltered(fromDate *time.Time, categories []string, available *bool, max *int, ord string) ([]*model.Maindb, error) {
+	return s.store.GetFiltered(fromDate, categories, available, max, ord)
 }
 
-func (s *Service) GetByCategory(category string) ([]*model.Maindb, error) {
-	return s.store.GetByCategory(category)
+func (s *Service) GetByID(id string) (*model.Maindb, error) {
+	return s.store.GetByID(id)
 }
 
 func (s *Service) Create(maindb *model.Maindb) error {
@@ -31,8 +32,4 @@ func (s *Service) Create(maindb *model.Maindb) error {
 
 func (s *Service) Update(maindb *model.Maindb) error {
 	return s.store.Update(maindb)
-}
-
-func (s *Service) Delete(id string) error {
-	return s.store.Delete(id)
 }

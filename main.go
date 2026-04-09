@@ -38,7 +38,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	// Colección
-	mux.HandleFunc("/api/main", handle.HandleMain)
+	mux.HandleFunc("/api/main", handle.HandleGetAllMains)
+	mux.HandleFunc("/api/newmain", handle.HandleNewMain)
 	// Item por ID (se parsea manualmente en el handler)
 	mux.HandleFunc("/api/main/", handle.HandleMainByID)
 

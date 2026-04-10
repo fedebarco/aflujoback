@@ -1,0 +1,446 @@
+basePath: /
+definitions:
+  model.Client:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  model.ClientCreatedResponse:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      token:
+        type: string
+    type: object
+  model.ClientUpdatedResponse:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      token:
+        type: string
+    type: object
+  model.ErrorJSON:
+    properties:
+      error:
+        type: string
+    type: object
+  model.MaindbWithSync:
+    properties:
+      available:
+        type: boolean
+      category:
+        type: string
+      created_at:
+        type: string
+      data:
+        type: string
+      id:
+        type: string
+      subtype:
+        type: string
+      synced:
+        type: boolean
+    type: object
+  model.Response:
+    properties:
+      advice:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/model.MaindbWithSync'
+        type: array
+      status:
+        type: string
+      timestamp:
+        type: string
+      total:
+        type: integer
+    type: object
+  transport.createClientBody:
+    properties:
+      name:
+        type: string
+    type: object
+  transport.mainCreateBody:
+    properties:
+      available:
+        type: boolean
+      category:
+        type: string
+      created_at:
+        type: string
+      data:
+        type: string
+      id:
+        type: string
+      subtype:
+        type: string
+    type: object
+  transport.updateClientBody:
+    properties:
+      name:
+        type: string
+      rotate_token:
+        type: boolean
+    type: object
+host: localhost:8005
+info:
+  contact: {}
+  description: 'API REST para maindb: clientes con token (header `token`), alta y
+    listados con estado de sync por cliente.'
+  title: Aflujo API
+  version: "1.0"
+paths:
+  /api/clients:
+    get:
+      description: Requiere headers admin (`user` y `token`).
+      parameters:
+      - description: Usuario admin (MAIN_USER)
+        in: header
+        name: user
+        required: true
+        type: string
+      - description: Token admin (MAIN_TOKEN)
+        in: header
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Client'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+      summary: Listar clientes
+      tags:
+      - clients
+    post:
+      consumes:
+      - application/json
+      description: Requiere headers admin (`user` y `token`). El campo token de la
+        respuesta solo se muestra en este alta.
+      parameters:
+      - description: Usuario admin (MAIN_USER)
+        in: header
+        name: user
+        required: true
+        type: string
+      - description: Token admin (MAIN_TOKEN)
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Nombre opcional
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/transport.createClientBody'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.ClientCreatedResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+      summary: Registrar cliente
+      tags:
+      - clients
+  /api/clients/{id}:
+    delete:
+      description: Requiere headers admin (`user` y `token`). No permite eliminar
+        el usuario admin.
+      parameters:
+      - description: Usuario admin (MAIN_USER)
+        in: header
+        name: user
+        required: true
+        type: string
+      - description: Token admin (MAIN_TOKEN)
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: ID del cliente
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+      summary: Eliminar cliente
+      tags:
+      - clients
+    put:
+      consumes:
+      - application/json
+      description: Requiere headers admin (`user` y `token`). No permite editar el
+        usuario admin.
+      parameters:
+      - description: Usuario admin (MAIN_USER)
+        in: header
+        name: user
+        required: true
+        type: string
+      - description: Token admin (MAIN_TOKEN)
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: ID del cliente
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: name opcional, rotate_token opcional
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/transport.updateClientBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ClientUpdatedResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+      summary: Editar cliente
+      tags:
+      - clients
+  /api/main:
+    get:
+      consumes:
+      - application/json
+      description: Filtros opcionales combinables (query). Requiere header token.
+      parameters:
+      - description: Desde fecha (YYYY-MM-DD UTC)
+        in: query
+        name: fromdate
+        type: string
+      - description: Categorías separadas por coma
+        in: query
+        name: category
+        type: string
+      - description: 'Filtrar por available: true, false, 1 o 0'
+        in: query
+        name: avariable
+        type: string
+      - description: Máximo de filas (1-1000)
+        in: query
+        name: max
+        type: integer
+      - description: Orden por created_at
+        enum:
+        - asc
+        - desc
+        in: query
+        name: ord
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.Response'
+        "500":
+          description: texto plano
+          schema:
+            type: string
+      security:
+      - TokenAuth: []
+      summary: Listar maindb
+      tags:
+      - maindb
+  /api/main/{id}:
+    get:
+      parameters:
+      - description: ID del registro
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/model.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.Response'
+      security:
+      - TokenAuth: []
+      summary: Obtener maindb por id
+      tags:
+      - maindb
+    put:
+      description: Pone available a false. Si ya era false, responde 200 con mensaje
+        informativo.
+      parameters:
+      - description: ID del registro
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/model.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.Response'
+      security:
+      - TokenAuth: []
+      summary: Deshabilitar maindb
+      tags:
+      - maindb
+  /api/newmain:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: category y subtype obligatorios
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/transport.mainCreateBody'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/model.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.Response'
+      security:
+      - TokenAuth: []
+      summary: Crear maindb
+      tags:
+      - maindb
+schemes:
+- http
+securityDefinitions:
+  TokenAuth:
+    in: header
+    name: token
+    type: apiKey
+swagger: "2.0"

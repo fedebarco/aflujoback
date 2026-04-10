@@ -3,10 +3,12 @@ package transport
 import (
 	"aflujo/model"
 	"aflujo/sevice"
+	"aflujo/store"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,17 +23,87 @@ func New(s *service.Service) *HandleMain {
 	return &HandleMain{Service: s}
 }
 
+func (h *HandleMain) authenticatedClient(w http.ResponseWriter, r *http.Request) (*model.Client, bool) {
+	token := strings.TrimSpace(r.Header.Get("token"))
+	now := time.Now().UTC().Truncate(time.Second)
+	if token == "" {
+		writeMainJSONResponse(w, http.StatusUnauthorized, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    "Falta el header token.",
+			Timestamp: now,
+			Items:     nil,
+		})
+		return nil, false
+	}
+	c, err := h.Service.GetClientByTokenHash(store.TokenHash(token))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeMainJSONResponse(w, http.StatusUnauthorized, model.Response{
+				Status:    "error",
+				Total:     0,
+				Advice:    "Token inválido.",
+				Timestamp: now,
+				Items:     nil,
+			})
+			return nil, false
+		}
+		writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    err.Error(),
+			Timestamp: now,
+			Items:     nil,
+		})
+		return nil, false
+	}
+	return c, true
+}
+
+func (h *HandleMain) authenticatedAdmin(w http.ResponseWriter, r *http.Request) bool {
+	user := strings.TrimSpace(r.Header.Get("user"))
+	token := strings.TrimSpace(r.Header.Get("token"))
+	if user == "" || token == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: "Faltan headers de admin: user y token."})
+		return false
+	}
+	if !h.Service.IsAdminCredentials(user, token) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: "Credenciales de admin inválidas."})
+		return false
+	}
+	return true
+}
+
+// HandleGetAllMains lista registros maindb con el flag synced del cliente autenticado.
+// @Summary Listar maindb
+// @Description Filtros opcionales combinables (query). Requiere header token.
+// @Tags maindb
+// @Accept json
+// @Produce json
+// @Security TokenAuth
+// @Param fromdate query string false "Desde fecha (YYYY-MM-DD UTC)"
+// @Param category query string false "Categorías separadas por coma"
+// @Param avariable query string false "Filtrar por available: true, false, 1 o 0"
+// @Param max query int false "Máximo de filas (1-1000)"
+// @Param ord query string false "Orden por created_at" Enums(asc,desc)
+// @Success 200 {object} model.Response
+// @Failure 401 {object} model.Response
+// @Failure 500 {string} string "texto plano"
+// @Router /api/main [get]
 func (h *HandleMain) HandleGetAllMains(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if r.Header.Get("token") != "to" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		client, ok := h.authenticatedClient(w, r)
+		if !ok {
 			return
 		}
 
 		q := r.URL.Query()
 
-		// Optional filters (combinables).
 		var (
 			fromDate *time.Time
 			max      *int
@@ -100,7 +172,7 @@ func (h *HandleMain) HandleGetAllMains(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		list, err := h.Service.GetAllFiltered(fromDate, cats, avail, max, ord)
+		list, err := h.Service.GetAllFilteredForClient(client.ID, fromDate, cats, avail, max, ord)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -121,8 +193,6 @@ func (h *HandleMain) HandleGetAllMains(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// mainCreateBody arma un Maindb desde JSON: obligatorios category y subtype (no vacíos);
-// id y created_at opcionales; si available no viene, se asume true; si data no viene, "".
 type mainCreateBody struct {
 	ID        string     `json:"id"`
 	CreatedAt *time.Time `json:"created_at"`
@@ -132,7 +202,6 @@ type mainCreateBody struct {
 	Available *bool      `json:"available"`
 }
 
-// adviceDuplicateMainCreate describe si el alta enviada coincide con el registro existente o lista diferencias por campo.
 func adviceDuplicateMainCreate(body *mainCreateBody, candidate *model.Maindb, existing *model.Maindb) string {
 	rfc := func(t time.Time) string {
 		return t.UTC().Truncate(time.Second).Format(time.RFC3339)
@@ -179,9 +248,27 @@ func writeMainJSONResponse(w http.ResponseWriter, code int, resp model.Response)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// HandleNewMain crea un registro maindb y actualiza el estado de sync (true para el autor, false para el resto).
+// @Summary Crear maindb
+// @Tags maindb
+// @Accept json
+// @Produce json
+// @Security TokenAuth
+// @Param body body mainCreateBody true "category y subtype obligatorios"
+// @Success 201 {object} model.Response
+// @Failure 400 {object} model.Response
+// @Failure 401 {object} model.Response
+// @Failure 409 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/newmain [post]
 func (h *HandleMain) HandleNewMain(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
+		client, ok := h.authenticatedClient(w, r)
+		if !ok {
+			return
+		}
+
 		var body mainCreateBody
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeMainJSONResponse(w, http.StatusBadRequest, model.Response{
@@ -233,12 +320,23 @@ func (h *HandleMain) HandleNewMain(w http.ResponseWriter, r *http.Request) {
 			existing, err := h.Service.GetByID(m.ID)
 			if err == nil {
 				advice := adviceDuplicateMainCreate(&body, &m, existing)
+				existingSync, errSync := h.Service.GetByIDForClient(m.ID, client.ID)
+				if errSync != nil {
+					writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+						Status:    "error",
+						Total:     0,
+						Advice:    errSync.Error(),
+						Timestamp: time.Now().UTC().Truncate(time.Second),
+						Items:     nil,
+					})
+					return
+				}
 				writeMainJSONResponse(w, http.StatusConflict, model.Response{
 					Status:    "error",
 					Total:     1,
 					Advice:    advice,
 					Timestamp: time.Now().UTC().Truncate(time.Second),
-					Items:     []*model.Maindb{existing},
+					Items:     []*model.MaindbWithSync{existingSync},
 				})
 				return
 			}
@@ -254,7 +352,7 @@ func (h *HandleMain) HandleNewMain(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if err := h.Service.Create(&m); err != nil {
+		if err := h.Service.CreateMainWithSync(&m, client.ID); err != nil {
 			writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
 				Status:    "error",
 				Total:     0,
@@ -270,18 +368,28 @@ func (h *HandleMain) HandleNewMain(w http.ResponseWriter, r *http.Request) {
 			Total:     1,
 			Advice:    "Registro creado correctamente.",
 			Timestamp: time.Now().UTC().Truncate(time.Second),
-			Items:     []*model.Maindb{&m},
+			Items:     []*model.MaindbWithSync{{Maindb: m, Synced: true}},
 		})
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
 }
 
-func (h *HandleMain) HandleMainByID(w http.ResponseWriter, r *http.Request) {
-	// Espera paths tipo: /api/main/{id}
-	id := strings.TrimPrefix(r.URL.Path, "/api/main/")
+// HandleGetMainByID obtiene un maindb por id con synced del cliente.
+// @Summary Obtener maindb por id
+// @Tags maindb
+// @Produce json
+// @Security TokenAuth
+// @Param id path string true "ID del registro"
+// @Success 200 {object} model.Response
+// @Failure 400 {object} model.Response
+// @Failure 401 {object} model.Response
+// @Failure 404 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/main/{id} [get]
+func (h *HandleMain) HandleGetMainByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" {
 		writeMainJSONResponse(w, http.StatusBadRequest, model.Response{
 			Status:    "error",
@@ -293,95 +401,305 @@ func (h *HandleMain) HandleMainByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch r.Method {
-	case http.MethodGet:
-		m, err := h.Service.GetByID(id)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				writeMainJSONResponse(w, http.StatusNotFound, model.Response{
-					Status:    "error",
-					Total:     0,
-					Advice:    "No existe un registro con el id indicado.",
-					Timestamp: time.Now().UTC().Truncate(time.Second),
-					Items:     nil,
-				})
-				return
-			}
-			writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+	client, ok := h.authenticatedClient(w, r)
+	if !ok {
+		return
+	}
+
+	m, err := h.Service.GetByIDForClient(id, client.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeMainJSONResponse(w, http.StatusNotFound, model.Response{
 				Status:    "error",
 				Total:     0,
-				Advice:    err.Error(),
+				Advice:    "No existe un registro con el id indicado.",
 				Timestamp: time.Now().UTC().Truncate(time.Second),
 				Items:     nil,
 			})
 			return
 		}
-		writeMainJSONResponse(w, http.StatusOK, model.Response{
-			Status:    "success",
-			Total:     1,
-			Advice:    "Registro recuperado correctamente.",
-			Timestamp: time.Now().UTC().Truncate(time.Second),
-			Items:     []*model.Maindb{m},
-		})
-	case http.MethodPut:
-		// Solo deshabilita: pone available de true a false. No modifica otros campos ni usa el body.
-		m, err := h.Service.GetByID(id)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				writeMainJSONResponse(w, http.StatusNotFound, model.Response{
-					Status:    "error",
-					Total:     0,
-					Advice:    "No existe un registro con el id indicado.",
-					Timestamp: time.Now().UTC().Truncate(time.Second),
-					Items:     nil,
-				})
-				return
-			}
-			writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
-				Status:    "error",
-				Total:     0,
-				Advice:    err.Error(),
-				Timestamp: time.Now().UTC().Truncate(time.Second),
-				Items:     nil,
-			})
-			return
-		}
-		if !m.Available {
-			writeMainJSONResponse(w, http.StatusOK, model.Response{
-				Status:    "success",
-				Total:     1,
-				Advice:    "El registro ya se había actualizado (available ya era false).",
-				Timestamp: time.Now().UTC().Truncate(time.Second),
-				Items:     []*model.Maindb{m},
-			})
-			return
-		}
-		m.Available = false
-		if err := h.Service.Update(m); err != nil {
-			writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
-				Status:    "error",
-				Total:     0,
-				Advice:    err.Error(),
-				Timestamp: time.Now().UTC().Truncate(time.Second),
-				Items:     nil,
-			})
-			return
-		}
-		writeMainJSONResponse(w, http.StatusOK, model.Response{
-			Status:    "success",
-			Total:     1,
-			Advice:    "Registro deshabilitado correctamente (available pasó a false).",
-			Timestamp: time.Now().UTC().Truncate(time.Second),
-			Items:     []*model.Maindb{m},
-		})
-	default:
-		writeMainJSONResponse(w, http.StatusMethodNotAllowed, model.Response{
+		writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
 			Status:    "error",
 			Total:     0,
-			Advice:    "Método no permitido.",
+			Advice:    err.Error(),
 			Timestamp: time.Now().UTC().Truncate(time.Second),
 			Items:     nil,
 		})
 		return
 	}
+	writeMainJSONResponse(w, http.StatusOK, model.Response{
+		Status:    "success",
+		Total:     1,
+		Advice:    "Registro recuperado correctamente.",
+		Timestamp: time.Now().UTC().Truncate(time.Second),
+		Items:     []*model.MaindbWithSync{m},
+	})
+}
+
+// HandlePutMainByID pone available en false y actualiza sync (true quien llama, false el resto).
+// @Summary Deshabilitar maindb
+// @Description Pone available a false. Si ya era false, responde 200 con mensaje informativo.
+// @Tags maindb
+// @Produce json
+// @Security TokenAuth
+// @Param id path string true "ID del registro"
+// @Success 200 {object} model.Response
+// @Failure 401 {object} model.Response
+// @Failure 404 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/main/{id} [put]
+func (h *HandleMain) HandlePutMainByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeMainJSONResponse(w, http.StatusBadRequest, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    "Falta el id en la URL.",
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     nil,
+		})
+		return
+	}
+
+	client, ok := h.authenticatedClient(w, r)
+	if !ok {
+		return
+	}
+
+	raw, err := h.Service.GetByID(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeMainJSONResponse(w, http.StatusNotFound, model.Response{
+				Status:    "error",
+				Total:     0,
+				Advice:    "No existe un registro con el id indicado.",
+				Timestamp: time.Now().UTC().Truncate(time.Second),
+				Items:     nil,
+			})
+			return
+		}
+		writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    err.Error(),
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     nil,
+		})
+		return
+	}
+	if !raw.Available {
+		mws, err := h.Service.GetByIDForClient(id, client.ID)
+		if err != nil {
+			writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+				Status:    "error",
+				Total:     0,
+				Advice:    err.Error(),
+				Timestamp: time.Now().UTC().Truncate(time.Second),
+				Items:     nil,
+			})
+			return
+		}
+		writeMainJSONResponse(w, http.StatusOK, model.Response{
+			Status:    "success",
+			Total:     1,
+			Advice:    "El registro ya se había actualizado (available ya era false).",
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     []*model.MaindbWithSync{mws},
+		})
+		return
+	}
+	m, err := h.Service.UpdateMainAvailableFalseWithSync(id, client.ID)
+	if err != nil {
+		writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    err.Error(),
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     nil,
+		})
+		return
+	}
+	writeMainJSONResponse(w, http.StatusOK, model.Response{
+		Status:    "success",
+		Total:     1,
+		Advice:    "Registro deshabilitado correctamente (available pasó a false).",
+		Timestamp: time.Now().UTC().Truncate(time.Second),
+		Items:     []*model.MaindbWithSync{m},
+	})
+}
+
+type createClientBody struct {
+	Name string `json:"name"`
+}
+
+// HandleCreateClient registra un cliente nuevo (sin token). Devuelve el token en claro una sola vez.
+// @Summary Registrar cliente
+// @Description Requiere headers admin (`user` y `token`). El campo token de la respuesta solo se muestra en este alta.
+// @Tags clients
+// @Accept json
+// @Produce json
+// @Param user header string true "Usuario admin (MAIN_USER)"
+// @Param token header string true "Token admin (MAIN_TOKEN)"
+// @Param body body createClientBody false "Nombre opcional"
+// @Success 201 {object} model.ClientCreatedResponse
+// @Failure 401 {object} model.ErrorJSON
+// @Failure 400 {object} model.ErrorJSON
+// @Failure 500 {object} model.ErrorJSON
+// @Router /api/clients [post]
+func (h *HandleMain) HandleCreateClient(w http.ResponseWriter, r *http.Request) {
+	if !h.authenticatedAdmin(w, r) {
+		return
+	}
+	var body createClientBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "JSON inválido: " + err.Error()})
+		return
+	}
+	out, err := h.Service.RegisterClient(body.Name)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// HandleListClients lista clientes (sin token_hash).
+// @Summary Listar clientes
+// @Description Requiere headers admin (`user` y `token`).
+// @Tags clients
+// @Produce json
+// @Param user header string true "Usuario admin (MAIN_USER)"
+// @Param token header string true "Token admin (MAIN_TOKEN)"
+// @Success 200 {array} model.Client
+// @Failure 401 {object} model.ErrorJSON
+// @Failure 500 {object} model.ErrorJSON
+// @Router /api/clients [get]
+func (h *HandleMain) HandleListClients(w http.ResponseWriter, r *http.Request) {
+	if !h.authenticatedAdmin(w, r) {
+		return
+	}
+	list, err := h.Service.ListClients()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(list)
+}
+
+type updateClientBody struct {
+	Name        *string `json:"name"`
+	RotateToken bool    `json:"rotate_token"`
+}
+
+// HandleUpdateClient actualiza nombre y/o rota token de un cliente.
+// @Summary Editar cliente
+// @Description Requiere headers admin (`user` y `token`). No permite editar el usuario admin.
+// @Tags clients
+// @Accept json
+// @Produce json
+// @Param user header string true "Usuario admin (MAIN_USER)"
+// @Param token header string true "Token admin (MAIN_TOKEN)"
+// @Param id path string true "ID del cliente"
+// @Param body body updateClientBody true "name opcional, rotate_token opcional"
+// @Success 200 {object} model.ClientUpdatedResponse
+// @Failure 400 {object} model.ErrorJSON
+// @Failure 401 {object} model.ErrorJSON
+// @Failure 404 {object} model.ErrorJSON
+// @Failure 500 {object} model.ErrorJSON
+// @Router /api/clients/{id} [put]
+func (h *HandleMain) HandleUpdateClient(w http.ResponseWriter, r *http.Request) {
+	if !h.authenticatedAdmin(w, r) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: "Falta el id del cliente."})
+		return
+	}
+
+	var body updateClientBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: "JSON inválido: " + err.Error()})
+		return
+	}
+
+	out, err := h.Service.UpdateClient(id, body.Name, body.RotateToken)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			w.WriteHeader(http.StatusNotFound)
+		case errors.Is(err, service.ErrAdminProtected):
+			w.WriteHeader(http.StatusBadRequest)
+		default:
+			if strings.Contains(strings.ToLower(err.Error()), "no changes") ||
+				strings.Contains(strings.ToLower(err.Error()), "cannot be empty") {
+				w.WriteHeader(http.StatusBadRequest)
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// HandleDeleteClient elimina un cliente.
+// @Summary Eliminar cliente
+// @Description Requiere headers admin (`user` y `token`). No permite eliminar el usuario admin.
+// @Tags clients
+// @Produce json
+// @Param user header string true "Usuario admin (MAIN_USER)"
+// @Param token header string true "Token admin (MAIN_TOKEN)"
+// @Param id path string true "ID del cliente"
+// @Success 204 {string} string "No Content"
+// @Failure 400 {object} model.ErrorJSON
+// @Failure 401 {object} model.ErrorJSON
+// @Failure 404 {object} model.ErrorJSON
+// @Failure 500 {object} model.ErrorJSON
+// @Router /api/clients/{id} [delete]
+func (h *HandleMain) HandleDeleteClient(w http.ResponseWriter, r *http.Request) {
+	if !h.authenticatedAdmin(w, r) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: "Falta el id del cliente."})
+		return
+	}
+	err := h.Service.DeleteClient(id)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			w.WriteHeader(http.StatusNotFound)
+		case errors.Is(err, service.ErrAdminProtected):
+			w.WriteHeader(http.StatusBadRequest)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

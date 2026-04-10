@@ -25,7 +25,14 @@ go run main.go
 
 Al iniciar vas a ver un log similar a:
 
-- `API running on http://localhost:8005/api`
+- `API: http://localhost:8005/api | Swagger UI: http://localhost:8005/swagger/index.html`
+- Cada request también se registra en consola (método, URI, código HTTP, duración).
+
+## Documentación OpenAPI (Swagger)
+
+- **UI:** `http://localhost:8005/swagger/index.html` (si cambiás el puerto con `PORT`, usá ese puerto).
+- **Regenerar** la spec tras editar comentarios `// @...` en `main.go` o `transport/handlemain.go`: desde la raíz del repo ejecutá `go generate .`
+- En la UI, **Authorize** → pegá el valor del header `token` para probar rutas que lo exigen.
 
 ## Base de datos
 

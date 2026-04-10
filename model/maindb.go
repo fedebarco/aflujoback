@@ -25,3 +25,9 @@ func (m *Maindb) ApplyDefaults() {
 		m.CreatedAt = time.Now().UTC()
 	}
 }
+
+// MaindbWithSync es un maindb con el flag de sincronización para el cliente autenticado.
+type MaindbWithSync struct {
+	Maindb
+	Synced bool `json:"synced"`
+}

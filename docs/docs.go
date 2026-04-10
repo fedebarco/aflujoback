@@ -273,6 +273,150 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/clients/{id}/permissions": {
+            "get": {
+                "description": "Requiere headers admin (` + "`" + `user` + "`" + ` y ` + "`" + `token` + "`" + `).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Obtener permisos de cliente",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Usuario admin (MAIN_USER)",
+                        "name": "user",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Token admin (MAIN_TOKEN)",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "ID del cliente",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.ClientPermissions"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Requiere headers admin (` + "`" + `user` + "`" + ` y ` + "`" + `token` + "`" + `). Reemplaza la configuración completa del cliente.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "clients"
+                ],
+                "summary": "Configurar permisos de cliente",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Usuario admin (MAIN_USER)",
+                        "name": "user",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Token admin (MAIN_TOKEN)",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "ID del cliente",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Permisos por categoría",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.UpsertClientPermissionsBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.ClientPermissions"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
+                        }
+                    }
+                }
+            }
+        },
         "/api/main": {
             "get": {
                 "security": [
@@ -344,6 +488,46 @@ const docTemplate = `{
                         "description": "texto plano",
                         "schema": {
                             "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/main/categories": {
+            "get": {
+                "description": "Endpoint público. Permite filtrar opcionalmente por available con query avariable=true|false|1|0.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "maindb"
+                ],
+                "summary": "Contar categorías de maindb",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filtrar por available: true, false, 1 o 0",
+                        "name": "avariable",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.CategoryCountResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorJSON"
                         }
                     }
                 }
@@ -520,6 +704,40 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "model.CategoryCount": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.CategoryCountResponse": {
+            "type": "object",
+            "properties": {
+                "advice": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.CategoryCount"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "model.Client": {
             "type": "object",
             "properties": {
@@ -548,6 +766,38 @@ const docTemplate = `{
                 },
                 "token": {
                     "type": "string"
+                }
+            }
+        },
+        "model.ClientPermissions": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "string"
+                },
+                "create_categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "max_create_categories": {
+                    "type": "integer"
+                },
+                "read_categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "restricted": {
+                    "type": "boolean"
+                },
+                "write_categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -622,6 +872,35 @@ const docTemplate = `{
                 },
                 "total": {
                     "type": "integer"
+                }
+            }
+        },
+        "model.UpsertClientPermissionsBody": {
+            "type": "object",
+            "properties": {
+                "create_categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "max_create_categories": {
+                    "type": "integer"
+                },
+                "read_categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "restricted": {
+                    "type": "boolean"
+                },
+                "write_categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

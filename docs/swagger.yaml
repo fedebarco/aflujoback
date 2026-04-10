@@ -1,5 +1,27 @@
 basePath: /
 definitions:
+  model.CategoryCount:
+    properties:
+      category:
+        type: string
+      total:
+        type: integer
+    type: object
+  model.CategoryCountResponse:
+    properties:
+      advice:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/model.CategoryCount'
+        type: array
+      status:
+        type: string
+      timestamp:
+        type: string
+      total:
+        type: integer
+    type: object
   model.Client:
     properties:
       created_at:
@@ -19,6 +41,27 @@ definitions:
         type: string
       token:
         type: string
+    type: object
+  model.ClientPermissions:
+    properties:
+      client_id:
+        type: string
+      create_categories:
+        items:
+          type: string
+        type: array
+      max_create_categories:
+        type: integer
+      read_categories:
+        items:
+          type: string
+        type: array
+      restricted:
+        type: boolean
+      write_categories:
+        items:
+          type: string
+        type: array
     type: object
   model.ClientUpdatedResponse:
     properties:
@@ -67,6 +110,25 @@ definitions:
         type: string
       total:
         type: integer
+    type: object
+  model.UpsertClientPermissionsBody:
+    properties:
+      create_categories:
+        items:
+          type: string
+        type: array
+      max_create_categories:
+        type: integer
+      read_categories:
+        items:
+          type: string
+        type: array
+      restricted:
+        type: boolean
+      write_categories:
+        items:
+          type: string
+        type: array
     type: object
   transport.createClientBody:
     properties:
@@ -279,6 +341,104 @@ paths:
       summary: Editar cliente
       tags:
       - clients
+  /api/clients/{id}/permissions:
+    get:
+      description: Requiere headers admin (`user` y `token`).
+      parameters:
+      - description: Usuario admin (MAIN_USER)
+        in: header
+        name: user
+        required: true
+        type: string
+      - description: Token admin (MAIN_TOKEN)
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: ID del cliente
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ClientPermissions'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+      summary: Obtener permisos de cliente
+      tags:
+      - clients
+    put:
+      consumes:
+      - application/json
+      description: Requiere headers admin (`user` y `token`). Reemplaza la configuración
+        completa del cliente.
+      parameters:
+      - description: Usuario admin (MAIN_USER)
+        in: header
+        name: user
+        required: true
+        type: string
+      - description: Token admin (MAIN_TOKEN)
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: ID del cliente
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Permisos por categoría
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/model.UpsertClientPermissionsBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ClientPermissions'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+      summary: Configurar permisos de cliente
+      tags:
+      - clients
   /api/main:
     get:
       consumes:
@@ -395,6 +555,33 @@ paths:
       security:
       - TokenAuth: []
       summary: Deshabilitar maindb
+      tags:
+      - maindb
+  /api/main/categories:
+    get:
+      description: Endpoint público. Permite filtrar opcionalmente por available con
+        query avariable=true|false|1|0.
+      parameters:
+      - description: 'Filtrar por available: true, false, 1 o 0'
+        in: query
+        name: avariable
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.CategoryCountResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.ErrorJSON'
+      summary: Contar categorías de maindb
       tags:
       - maindb
   /api/newmain:

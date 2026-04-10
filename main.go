@@ -58,6 +58,20 @@ func main() {
 	)`,
 		`CREATE INDEX IF NOT EXISTS idx_maindb_client_sync_client ON maindb_client_sync(client_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_maindb_client_sync_maindb ON maindb_client_sync(maindb_id)`,
+		`CREATE TABLE IF NOT EXISTS client_permissions (
+		client_id TEXT PRIMARY KEY,
+		restricted INTEGER NOT NULL DEFAULT 0,
+		max_create_categories INTEGER NOT NULL DEFAULT 0,
+		FOREIGN KEY (client_id) REFERENCES clients(id)
+	)`,
+		`CREATE TABLE IF NOT EXISTS client_category_permissions (
+		client_id TEXT NOT NULL,
+		action TEXT NOT NULL,
+		category TEXT NOT NULL,
+		PRIMARY KEY (client_id, action, category),
+		FOREIGN KEY (client_id) REFERENCES clients(id)
+	)`,
+		`CREATE INDEX IF NOT EXISTS idx_client_category_permissions_client_action ON client_category_permissions(client_id, action)`,
 	}
 	for _, q := range schema {
 		if _, err = db.Exec(q); err != nil {
@@ -89,7 +103,10 @@ func main() {
 	mux.HandleFunc("GET /api/clients", handle.HandleListClients)
 	mux.HandleFunc("PUT /api/clients/{id}", handle.HandleUpdateClient)
 	mux.HandleFunc("DELETE /api/clients/{id}", handle.HandleDeleteClient)
+	mux.HandleFunc("GET /api/clients/{id}/permissions", handle.HandleGetClientPermissions)
+	mux.HandleFunc("PUT /api/clients/{id}/permissions", handle.HandleUpsertClientPermissions)
 	mux.HandleFunc("GET /api/main", handle.HandleGetAllMains)
+	mux.HandleFunc("GET /api/main/categories", handle.HandleGetCategoryCounts)
 	mux.HandleFunc("POST /api/newmain", handle.HandleNewMain)
 	mux.HandleFunc("GET /api/main/{id}", handle.HandleGetMainByID)
 	mux.HandleFunc("PUT /api/main/{id}", handle.HandlePutMainByID)

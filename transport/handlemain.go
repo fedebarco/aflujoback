@@ -172,7 +172,17 @@ func (h *HandleMain) HandleGetAllMains(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		list, err := h.Service.GetAllFilteredForClient(client.ID, fromDate, cats, avail, max, ord)
+		allowedCats, err := h.Service.FilterReadableCategories(client.ID, cats)
+		if err != nil {
+			var denied *service.PermissionDeniedError
+			if errors.As(err, &denied) {
+				writePermissionDeniedResponse(w, denied.Advice)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		list, err := h.Service.GetAllFilteredForClient(client.ID, fromDate, allowedCats, avail, max, ord)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -191,6 +201,62 @@ func (h *HandleMain) HandleGetAllMains(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+}
+
+// HandleGetCategoryCounts lista categorías y cuántas veces aparecen en maindb.
+// @Summary Contar categorías de maindb
+// @Description Endpoint público. Permite filtrar opcionalmente por available con query avariable=true|false|1|0.
+// @Tags maindb
+// @Produce json
+// @Param avariable query string false "Filtrar por available: true, false, 1 o 0"
+// @Success 200 {object} model.CategoryCountResponse
+// @Failure 400 {object} model.ErrorJSON
+// @Failure 500 {object} model.ErrorJSON
+// @Router /api/main/categories [get]
+func (h *HandleMain) HandleGetCategoryCounts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var avail *bool
+	if v := strings.TrimSpace(r.URL.Query().Get("avariable")); v != "" {
+		var b bool
+		switch v {
+		case "1":
+			b = true
+		case "0":
+			b = false
+		default:
+			parsed, err := strconv.ParseBool(v)
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: "invalid avariable (expected true/false/1/0)"})
+				return
+			}
+			b = parsed
+		}
+		avail = &b
+	}
+
+	items, err := h.Service.GetCategoryCounts(avail)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: err.Error()})
+		return
+	}
+
+	resp := model.CategoryCountResponse{
+		Status:    "success",
+		Total:     len(items),
+		Advice:    "Se recuperaron correctamente los conteos por categoría.",
+		Timestamp: time.Now().UTC().Truncate(time.Second),
+		Items:     items,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 type mainCreateBody struct {
@@ -246,6 +312,16 @@ func writeMainJSONResponse(w http.ResponseWriter, code int, resp model.Response)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func writePermissionDeniedResponse(w http.ResponseWriter, advice string) {
+	writeMainJSONResponse(w, http.StatusForbidden, model.Response{
+		Status:    "error",
+		Total:     0,
+		Advice:    advice,
+		Timestamp: time.Now().UTC().Truncate(time.Second),
+		Items:     nil,
+	})
 }
 
 // HandleNewMain crea un registro maindb y actualiza el estado de sync (true para el autor, false para el resto).
@@ -311,6 +387,22 @@ func (h *HandleMain) HandleNewMain(w http.ResponseWriter, r *http.Request) {
 			m.Available = *body.Available
 		} else {
 			m.Available = true
+		}
+
+		if err := h.Service.ValidateCategoryAccess(client.ID, "create", m.Category); err != nil {
+			var denied *service.PermissionDeniedError
+			if errors.As(err, &denied) {
+				writePermissionDeniedResponse(w, denied.Advice)
+				return
+			}
+			writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+				Status:    "error",
+				Total:     0,
+				Advice:    err.Error(),
+				Timestamp: time.Now().UTC().Truncate(time.Second),
+				Items:     nil,
+			})
+			return
 		}
 
 		idProvided := m.ID != ""
@@ -406,6 +498,43 @@ func (h *HandleMain) HandleGetMainByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	raw, err := h.Service.GetByID(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeMainJSONResponse(w, http.StatusNotFound, model.Response{
+				Status:    "error",
+				Total:     0,
+				Advice:    "No existe un registro con el id indicado.",
+				Timestamp: time.Now().UTC().Truncate(time.Second),
+				Items:     nil,
+			})
+			return
+		}
+		writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    err.Error(),
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     nil,
+		})
+		return
+	}
+	if err := h.Service.ValidateCategoryAccess(client.ID, "read", raw.Category); err != nil {
+		var denied *service.PermissionDeniedError
+		if errors.As(err, &denied) {
+			writePermissionDeniedResponse(w, denied.Advice)
+			return
+		}
+		writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    err.Error(),
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     nil,
+		})
+		return
+	}
+
 	m, err := h.Service.GetByIDForClient(id, client.ID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -476,6 +605,21 @@ func (h *HandleMain) HandlePutMainByID(w http.ResponseWriter, r *http.Request) {
 				Timestamp: time.Now().UTC().Truncate(time.Second),
 				Items:     nil,
 			})
+			return
+		}
+		writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
+			Status:    "error",
+			Total:     0,
+			Advice:    err.Error(),
+			Timestamp: time.Now().UTC().Truncate(time.Second),
+			Items:     nil,
+		})
+		return
+	}
+	if err := h.Service.ValidateCategoryAccess(client.ID, "write", raw.Category); err != nil {
+		var denied *service.PermissionDeniedError
+		if errors.As(err, &denied) {
+			writePermissionDeniedResponse(w, denied.Advice)
 			return
 		}
 		writeMainJSONResponse(w, http.StatusInternalServerError, model.Response{
@@ -657,6 +801,115 @@ func (h *HandleMain) HandleUpdateClient(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// HandleGetClientPermissions devuelve permisos configurados de un cliente.
+// @Summary Obtener permisos de cliente
+// @Description Requiere headers admin (`user` y `token`).
+// @Tags clients
+// @Produce json
+// @Param user header string true "Usuario admin (MAIN_USER)"
+// @Param token header string true "Token admin (MAIN_TOKEN)"
+// @Param id path string true "ID del cliente"
+// @Success 200 {object} model.ClientPermissions
+// @Failure 400 {object} model.ErrorJSON
+// @Failure 401 {object} model.ErrorJSON
+// @Failure 404 {object} model.ErrorJSON
+// @Failure 500 {object} model.ErrorJSON
+// @Router /api/clients/{id}/permissions [get]
+func (h *HandleMain) HandleGetClientPermissions(w http.ResponseWriter, r *http.Request) {
+	if !h.authenticatedAdmin(w, r) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: "Falta el id del cliente."})
+		return
+	}
+	if _, err := h.Service.GetClientByID(id); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if errors.Is(err, sql.ErrNoRows) {
+			w.WriteHeader(http.StatusNotFound)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: err.Error()})
+		return
+	}
+	out, err := h.Service.GetClientPermissions(id)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// HandleUpsertClientPermissions reemplaza permisos de un cliente.
+// @Summary Configurar permisos de cliente
+// @Description Requiere headers admin (`user` y `token`). Reemplaza la configuración completa del cliente.
+// @Tags clients
+// @Accept json
+// @Produce json
+// @Param user header string true "Usuario admin (MAIN_USER)"
+// @Param token header string true "Token admin (MAIN_TOKEN)"
+// @Param id path string true "ID del cliente"
+// @Param body body model.UpsertClientPermissionsBody true "Permisos por categoría"
+// @Success 200 {object} model.ClientPermissions
+// @Failure 400 {object} model.ErrorJSON
+// @Failure 401 {object} model.ErrorJSON
+// @Failure 404 {object} model.ErrorJSON
+// @Failure 500 {object} model.ErrorJSON
+// @Router /api/clients/{id}/permissions [put]
+func (h *HandleMain) HandleUpsertClientPermissions(w http.ResponseWriter, r *http.Request) {
+	if !h.authenticatedAdmin(w, r) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: "Falta el id del cliente."})
+		return
+	}
+	if _, err := h.Service.GetClientByID(id); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if errors.Is(err, sql.ErrNoRows) {
+			w.WriteHeader(http.StatusNotFound)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: err.Error()})
+		return
+	}
+
+	var body model.UpsertClientPermissionsBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: "JSON inválido: " + err.Error()})
+		return
+	}
+	out, err := h.Service.UpsertClientPermissions(id, body)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(strings.ToLower(err.Error()), "max_create_categories") ||
+			strings.Contains(strings.ToLower(err.Error()), "exceeds") {
+			w.WriteHeader(http.StatusBadRequest)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		_ = json.NewEncoder(w).Encode(model.ErrorJSON{Error: err.Error()})
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(out)

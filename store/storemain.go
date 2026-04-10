@@ -3,6 +3,7 @@ package store
 import (
 	"aflujo/model"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,9 @@ import (
 // Storer define el contrato de persistencia para Maindb, clientes y sync.
 type Storer interface {
 	GetFilteredForClient(clientID string, fromDate *time.Time, categories []string, available *bool, max *int, ord string) ([]*model.MaindbWithSync, error)
+	GetCategoryCounts(available *bool) ([]*model.CategoryCount, error)
+	GetClientPermissions(clientID string) (*model.ClientPermissions, error)
+	UpsertClientPermissions(p *model.ClientPermissions) error
 	GetByID(id string) (*model.Maindb, error)
 	GetByIDForClient(id, clientID string) (*model.MaindbWithSync, error)
 	CreateMainWithSync(m *model.Maindb, authorClientID string) error
@@ -154,6 +158,32 @@ WHERE 1=1`)
 		list = append(list, &model.MaindbWithSync{Maindb: m, Synced: synced})
 	}
 	return list, rows.Err()
+}
+
+func (s *Store) GetCategoryCounts(available *bool) ([]*model.CategoryCount, error) {
+	q := `SELECT category, COUNT(*) AS total FROM maindb`
+	args := make([]any, 0, 1)
+	if available != nil {
+		q += ` WHERE available = ?`
+		args = append(args, boolToInt(*available))
+	}
+	q += ` GROUP BY category ORDER BY total DESC, category ASC`
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]*model.CategoryCount, 0)
+	for rows.Next() {
+		var row model.CategoryCount
+		if err := rows.Scan(&row.Category, &row.Total); err != nil {
+			return nil, err
+		}
+		out = append(out, &row)
+	}
+	return out, rows.Err()
 }
 
 func listClientIDsTx(tx *sql.Tx) ([]string, error) {
@@ -400,4 +430,136 @@ func boolToInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func normalizeCategories(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		c := strings.TrimSpace(raw)
+		if c == "" {
+			continue
+		}
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	return out
+}
+
+func loadPermissionCategoriesTx(tx *sql.Tx, clientID, action string) ([]string, error) {
+	rows, err := tx.Query(
+		`SELECT category FROM client_category_permissions WHERE client_id = ? AND action = ? ORDER BY category ASC`,
+		clientID, action,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetClientPermissions(clientID string) (*model.ClientPermissions, error) {
+	p := &model.ClientPermissions{
+		ClientID:            clientID,
+		Restricted:          false,
+		MaxCreateCategories: 0,
+		ReadCategories:      nil,
+		WriteCategories:     nil,
+		CreateCategories:    nil,
+	}
+
+	row := s.db.QueryRow(
+		`SELECT restricted, max_create_categories FROM client_permissions WHERE client_id = ?`,
+		clientID,
+	)
+	var restrictedInt sql.NullInt64
+	var maxCreate sql.NullInt64
+	err := row.Scan(&restrictedInt, &maxCreate)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return p, nil
+		}
+		return nil, err
+	}
+	p.Restricted = restrictedInt.Valid && restrictedInt.Int64 != 0
+	if maxCreate.Valid && maxCreate.Int64 > 0 {
+		p.MaxCreateCategories = int(maxCreate.Int64)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if p.ReadCategories, err = loadPermissionCategoriesTx(tx, clientID, "read"); err != nil {
+		return nil, err
+	}
+	if p.WriteCategories, err = loadPermissionCategoriesTx(tx, clientID, "write"); err != nil {
+		return nil, err
+	}
+	if p.CreateCategories, err = loadPermissionCategoriesTx(tx, clientID, "create"); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func insertPermissionCategoriesTx(tx *sql.Tx, clientID, action string, categories []string) error {
+	for _, c := range normalizeCategories(categories) {
+		if _, err := tx.Exec(
+			`INSERT INTO client_category_permissions (client_id, action, category) VALUES (?, ?, ?)`,
+			clientID, action, c,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) UpsertClientPermissions(p *model.ClientPermissions) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(
+		`INSERT INTO client_permissions (client_id, restricted, max_create_categories)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(client_id) DO UPDATE SET restricted = excluded.restricted, max_create_categories = excluded.max_create_categories`,
+		p.ClientID, boolToInt(p.Restricted), p.MaxCreateCategories,
+	); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM client_category_permissions WHERE client_id = ?`, p.ClientID); err != nil {
+		return err
+	}
+	if err := insertPermissionCategoriesTx(tx, p.ClientID, "read", p.ReadCategories); err != nil {
+		return err
+	}
+	if err := insertPermissionCategoriesTx(tx, p.ClientID, "write", p.WriteCategories); err != nil {
+		return err
+	}
+	if err := insertPermissionCategoriesTx(tx, p.ClientID, "create", p.CreateCategories); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
